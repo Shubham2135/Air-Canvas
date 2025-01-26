@@ -13,50 +13,18 @@ mpDraw = mp.solutions.drawing_utils
 # Variables for drawing
 drawing = False
 points = []  # To store points while drawing
-button_selected = None  # Currently selected button ("draw" or "clear")
+button_selected = None  # Currently selected button ("pen" or "eraser")
 last_button_time = 0  # Timestamp of the last button click
-last_drawing_time = None  # Time of the last drawing action
-shape_locked = False  # Lock the shape after detection
-detected_shape = None  # Name of the detected shape
-shape_contour = None  # Contour of the detected shape
+hand_present = False  # To track if the hand is in the frame
+shape_detected = False  # Flag to indicate if shapes have been detected
+shapes_info = []  # To store detected shapes
 
 # Button positions
-button_draw_pos = (50, 20, 150, 70)  # (x1, y1, x2, y2) for the "Draw" button
-button_clear_pos = (200, 20, 300, 70)  # (x1, y1, x2, y2) for the "Clear" button
+button_pen_pos = (50, 20, 150, 70)  # (x1, y1, x2, y2) for the "Pen" button
+button_eraser_pos = (200, 20, 300, 70)  # (x1, y1, x2, y2) for the "Eraser" button
 
 # Initialize webcam
 cap = cv2.VideoCapture(0)
-
-def fit_shape(points):
-    """Convert rough drawings to proper shapes."""
-    filtered_points = [p for p in points if p is not None]  # Remove None values
-    if len(filtered_points) < 5:  # Too few points to detect a shape
-        return None, None
-
-    # Create a contour from the points
-    contour = np.array(filtered_points, dtype=np.int32)
-
-    # Approximate the contour to detect shapes
-    approx = cv2.approxPolyDP(contour, epsilon=5, closed=True)
-
-    if len(approx) == 3:
-        return "Triangle", approx
-    elif len(approx) == 4:
-        # Check if the shape is a rectangle or square
-        rect = cv2.boundingRect(approx)
-        aspect_ratio = rect[2] / rect[3]  # width/height
-        if 0.9 <= aspect_ratio <= 1.1:
-            return "Square", approx
-        else:
-            return "Rectangle", approx
-    else:
-        # Fit a circle
-        (cx, cy), radius = cv2.minEnclosingCircle(contour)
-        distances = [np.linalg.norm(np.array([cx, cy]) - np.array(p)) for p in filtered_points]
-        if np.var(distances) < 1000:  # Circle detection threshold
-            return "Circle", None
-
-    return None, None
 
 while True:
     ret, frame = cap.read()
@@ -70,73 +38,120 @@ while True:
     result = hands.process(framergb)
 
     # Draw buttons
-    cv2.rectangle(frame, (button_draw_pos[0], button_draw_pos[1]),
-                  (button_draw_pos[2], button_draw_pos[3]), (255, 0, 0), -1)
-    cv2.putText(frame, "Draw", (button_draw_pos[0] + 10, button_draw_pos[1] + 40),
+    cv2.rectangle(frame, (button_pen_pos[0], button_pen_pos[1]),
+                  (button_pen_pos[2], button_pen_pos[3]), (255, 0, 0), -1)
+    cv2.putText(frame, "Pen", (button_pen_pos[0] + 10, button_pen_pos[1] + 40),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
-    cv2.rectangle(frame, (button_clear_pos[0], button_clear_pos[1]),
-                  (button_clear_pos[2], button_clear_pos[3]), (0, 0, 255), -1)
-    cv2.putText(frame, "Clear", (button_clear_pos[0] + 10, button_clear_pos[1] + 40),
+    cv2.rectangle(frame, (button_eraser_pos[0], button_eraser_pos[1]),
+                  (button_eraser_pos[2], button_eraser_pos[3]), (0, 0, 255), -1)
+    cv2.putText(frame, "Eraser", (button_eraser_pos[0] + 10, button_eraser_pos[1] + 40),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
     # Check for hand landmarks
     if result.multi_hand_landmarks:
+        shapes_info = []  # Reset detected shapes when the hand is present
+        shape_detected = False
+        hand_present = True  # Hand is detected in the frame
         for hand_landmarks in result.multi_hand_landmarks:
             mpDraw.draw_landmarks(frame, hand_landmarks, mpHands.HAND_CONNECTIONS)
 
-            # Get fingertip position (index finger)
-            fore_finger = hand_landmarks.landmark[8]
-            fx, fy = int(fore_finger.x * frame.shape[1]), int(fore_finger.y * frame.shape[0])
+            # Get fingertip positions (index and middle fingers)
+            index_finger = hand_landmarks.landmark[8]
+            middle_finger = hand_landmarks.landmark[12]
+            fx, fy = int(index_finger.x * frame.shape[1]), int(index_finger.y * frame.shape[0])
+            mx, my = int(middle_finger.x * frame.shape[1]), int(middle_finger.y * frame.shape[0])
 
-            # Get thumb position
-            thumb = hand_landmarks.landmark[4]
-            tx, ty = int(thumb.x * frame.shape[1]), int(thumb.y * frame.shape[0])
+            # Calculate distance between index and middle fingers
+            distance = np.hypot(mx - fx, my - fy)
 
-            # Check if thumb and index are close (pinch gesture)
-            pinch = np.hypot(tx - fx, ty - fy) < 30
+            # Check finger states
+            index_up = index_finger.y < hand_landmarks.landmark[6].y  # Index finger is up
+            middle_up = middle_finger.y < hand_landmarks.landmark[10].y  # Middle finger is up
 
             # Check if the index finger is clicking a button
             current_time = time.time()
             if fy < 100:  # Within the button area
-                if button_draw_pos[0] <= fx <= button_draw_pos[2] and current_time - last_button_time > 2:
-                    button_selected = "draw"
+                if button_pen_pos[0] <= fx <= button_pen_pos[2] and current_time - last_button_time > 2:
+                    button_selected = "pen"
                     last_button_time = current_time
-                elif button_clear_pos[0] <= fx <= button_clear_pos[2] and current_time - last_button_time > 2:
-                    button_selected = "clear"
-                    points = []
-                    detected_shape = None
-                    shape_locked = False
+                elif button_eraser_pos[0] <= fx <= button_eraser_pos[2] and current_time - last_button_time > 2:
+                    button_selected = "eraser"
                     last_button_time = current_time
 
             # Draw a small circle at the fingertip
             cv2.circle(frame, (fx, fy), 8, (0, 255, 0), -1)
 
-            # Start/stop drawing based on the selected mode and pinch gesture
-            if button_selected == "draw" and not pinch:
+            # Handle drawing/erasing based on the selected mode
+            if button_selected == "pen" and index_up and not middle_up:
+                if not drawing:  # Add a break if restarting drawing
+                    points.append(None)
                 points.append((fx, fy))
                 drawing = True
-                last_drawing_time = time.time()  # Update last drawing time
-                shape_locked = False
-            elif pinch and drawing:
-                points.append(None)  # Add a break in the drawing when pinched
+            elif button_selected == "pen" and middle_up:
                 drawing = False
+            elif button_selected == "eraser" and index_up and middle_up:
+                for i, point in enumerate(points):
+                    if point is not None:  # Skip None values
+                        px, py = point
+                        if np.hypot(px - fx, py - fy) < distance:
+                            points[i] = None  # Erase point
 
-    # Detect and convert rough drawing to proper shape after 3 seconds of inactivity
-    if not drawing and points and last_drawing_time and time.time() - last_drawing_time > 3 and not shape_locked:
-        detected_shape, shape_contour = fit_shape(points)
-        shape_locked = True
+                # Display eraser mode
+                cv2.putText(frame, "Eraser Mode", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+    else:
+        if hand_present:  # If hand was present but now gone
+            points.append(None)
+            hand_present = False
 
-    # Draw the detected shape
-    if shape_locked and detected_shape:
-        if detected_shape == "Circle":
-            filtered_points = [p for p in points if p is not None]
-            (cx, cy), radius = cv2.minEnclosingCircle(np.array(filtered_points, dtype=np.int32))
-            cv2.circle(frame, (int(cx), int(cy)), int(radius), (0, 255, 0), 2)
-        elif shape_contour is not None:
-            cv2.polylines(frame, [shape_contour], isClosed=True, color=(0, 255, 0), thickness=2)
-        cv2.putText(frame, f"Detected: {detected_shape}", (10, 120),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+    # If hand is not in the frame and shapes have not been detected yet
+    if not hand_present and not shape_detected and points:
+        # Create a blank canvas to draw points
+        canvas = np.zeros_like(frame)
+        for i in range(1, len(points)):
+            if points[i - 1] is None or points[i] is None:
+                continue
+            cv2.line(canvas, points[i - 1], points[i], (255, 255, 255), 2)
+
+        # Convert canvas to grayscale and find contours
+        gray = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
+        contours, _ = cv2.findContours(gray, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        for contour in contours:
+            # Approximate the contour to a polygon
+            epsilon = 0.02 * cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, epsilon, True)
+
+            # Identify the shape based on the number of vertices
+            x, y, w, h = cv2.boundingRect(approx)
+            if len(approx) == 3:
+                shape_name = "Triangle"
+                color = (0, 255, 255)
+            elif len(approx) == 4:
+                aspect_ratio = float(w) / h
+                shape_name = "Square" if 0.95 <= aspect_ratio <= 1.05 else "Rectangle"
+                color = (255, 0, 255)
+            elif len(approx) > 4:
+                shape_name = "Circle"
+                color = (0, 255, 0)
+            else:
+                shape_name = "Unknown"
+                color = (0, 0, 255)
+
+            # Save shape information for persistent display
+            shapes_info.append((shape_name, x, y, w, h, color))
+
+        shape_detected = True  # Prevent detecting shapes repeatedly
+
+    # Draw the detected shapes
+    for shape_name, x, y, w, h, color in shapes_info:
+        cv2.putText(frame, shape_name, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+        if shape_name == "Circle":
+            center = (x + w // 2, y + h // 2)
+            radius = w // 2
+            cv2.circle(frame, center, radius, color, 2)
+        else:
+            cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
 
     # Draw the points on the canvas
     for i in range(1, len(points)):
@@ -145,7 +160,7 @@ while True:
         cv2.line(frame, points[i - 1], points[i], (0, 0, 255), 2)
 
     # Show the frame
-    cv2.imshow("Shape Drawing Tool", frame)
+    cv2.imshow("Drawing Tool", frame)
 
     # Exit the program when 'q' is pressed
     if cv2.waitKey(1) == ord('q'):

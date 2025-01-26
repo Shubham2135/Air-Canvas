@@ -1,7 +1,12 @@
 import cv2
 import numpy as np
 import mediapipe as mp
+import pytesseract
 import time
+
+# Path to tesseract executable
+# On Windows, you might need to specify the path like so:
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 # Initialize mediapipe
 mpHands = mp.solutions.hands
@@ -96,9 +101,29 @@ while True:
                 # Display eraser mode
                 cv2.putText(frame, "Eraser Mode", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
     else:
-        if hand_present:  # If hand was present but now gone, add a break
+        if hand_present:  # If hand was present but now gone
             points.append(None)
             hand_present = False
+
+    # If hand is not in the frame, detect possible text-like areas
+    if not hand_present and points:
+        # Create a blank canvas to draw points
+        canvas = np.zeros_like(frame)
+        for i in range(1, len(points)):
+            if points[i - 1] is None or points[i] is None:
+                continue
+            cv2.line(canvas, points[i - 1], points[i], (255, 255, 255), 2)
+
+        # Convert canvas to grayscale and apply thresholding
+        gray = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+
+        # Use pytesseract to extract text from the image
+        text = pytesseract.image_to_string(thresh, config='--psm 6')
+
+        # Display the detected text
+        if text.strip():
+            cv2.putText(frame, f"Detected Text: {text}", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
     # Draw the points on the canvas
     for i in range(1, len(points)):
