@@ -109,7 +109,7 @@ while True:
                         print(f"Drawing saved to {image_path}!")
                     last_button_time = current_time
                 elif button_open_pos[0] <= fx <= button_open_pos[2] and current_time - last_button_time > 2:
-                    # Open an image file
+                    # Open an image 
                     filepath = open_file_dialog()  # Open file dialog to select image
                     if filepath:
                         image = cv2.imread(filepath)  # Load the image
