@@ -19,7 +19,7 @@ hand_present = False  # To track if the hand is in the frame
 
 # Button positions
 button_pen_pos = (50, 20, 150, 70)  # (x1, y1, x2, y2) for the "Pen" button
-button_eraser_pos = (200, 20, 300, 70)  # (x1, y1, x2, y2) for the "Eraser" button
+button_eraser_pos = (200, 20, 300, 70)  # (x1, y1, x2, y2) for  the "Eraser" button
 
 # Initialize webcam
 cap = cv2.VideoCapture(0)
