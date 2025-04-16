@@ -25,16 +25,16 @@ button_selected = None
 last_button_time = 0
 canvas_open = False
 
-# Initialize camera
+# Initialize canvas
 cap = cv2.VideoCapture(0)
 width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
 # Canvas initialization
-canvas_image = np.ones((height, width, 3), dtype=np.uint8) * 255  # Start with blank canvas
-persistent_drawing = None
+canvas_image = np.ones((height, width, 3), dtype=np.uint8) * 255
 if os.path.exists('drawing.png'):
-    persistent_drawing = cv2.imread('drawing.png')
+    canvas_image = cv2.imread('drawing.png')
+    canvas_image = cv2.resize(canvas_image, (width, height))
 
 # Button positions
 buttons = {
@@ -54,6 +54,7 @@ def calculate_circularity(contour):
 def improved_shape_detection(stroke):
     temp_canvas = np.zeros((height, width), dtype=np.uint8)
     
+    # Draw the stroke on temporary canvas
     if len(stroke) >= 2:
         cv2.polylines(temp_canvas, [np.array(stroke)], False, 255, 2)
     
@@ -64,7 +65,7 @@ def improved_shape_detection(stroke):
         if area < MIN_AREA:
             continue
         
-        # Circle detection
+        # Circle check
         circularity = calculate_circularity(cnt)
         (x, y), radius = cv2.minEnclosingCircle(cnt)
         circle_area = math.pi * (radius ** 2)
@@ -73,7 +74,7 @@ def improved_shape_detection(stroke):
             abs(area - circle_area) < ASPECT_RATIO_TOLERANCE * circle_area):
             return ("circle", (int(x), int(y), int(radius)))
         
-        # Polygon detection
+        # Polygon check
         epsilon = 0.02 * cv2.arcLength(cnt, True)
         approx = cv2.approxPolyDP(cnt, epsilon, True)
         num_vertices = len(approx)
@@ -103,21 +104,23 @@ while True:
     # Create overlay
     overlay = frame.copy()
     
-    # Blend canvas only when there's content
-    if persistent_drawing is not None or len(current_stroke) > 0 or button_selected:
-        mask = cv2.inRange(canvas_image, (255, 255, 255), (255, 255, 255))
-        inverted_mask = cv2.bitwise_not(mask)
-        background = cv2.bitwise_and(overlay, overlay, mask=mask)
-        foreground = cv2.bitwise_and(canvas_image, canvas_image, mask=inverted_mask)
-        overlay = cv2.add(background, foreground)
+    # Always show drawing on camera feed (FIX 1: Remove canvas_open check)
+    mask_white = cv2.inRange(canvas_image, (255, 255, 255), (255, 255, 255))
+    mask_drawing = cv2.bitwise_not(mask_white)
+    overlay_bg = cv2.bitwise_and(overlay, overlay, mask=mask_white)
+    drawing_fg = cv2.bitwise_and(canvas_image, canvas_image, mask=mask_drawing)
+    overlay = cv2.add(overlay_bg, drawing_fg)
 
-    # Draw UI buttons
+    # Draw UI elements
     for name, (x1, y1, x2, y2) in buttons.items():
+        display_name = name.capitalize()
         color = (255, 0, 0) if name == "pen" else \
                 (0, 0, 255) if name == "eraser" else \
                 (0, 255, 0) if name == "shape" else \
                 (255, 255, 0)
-        display_name = "Save" if (name == "canvas" and canvas_open) else name.capitalize()
+        
+        if name == "canvas":
+            display_name = "Save" if canvas_open else "Canvas"
         
         if button_selected == name:
             cv2.rectangle(overlay, (x1-2, y1-2), (x2+2, y2+2), (0, 255, 0), 2)
@@ -125,11 +128,11 @@ while True:
         cv2.putText(overlay, display_name, (x1+10, y1+40), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
 
-    # Show current mode
+    # Mode display
     mode_text = f"Mode: {button_selected.capitalize()}" if button_selected else "Mode: None"
     cv2.putText(overlay, mode_text, (10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
 
-    # Hand detection logic
+    # Hand detection
     if result.multi_hand_landmarks:
         for hand_landmarks in result.multi_hand_landmarks:
             mpDraw.draw_landmarks(overlay, hand_landmarks, mpHands.HAND_CONNECTIONS)
@@ -140,7 +143,7 @@ while True:
             fx, fy = int(index.x * width), int(index.y * height)
             mx, my = int(middle.x * width), int(middle.y * height)
 
-            # Calculate finger distance
+            # Calculate distance between fingers
             distance = np.hypot(mx - fx, my - fy)
             fingers_together = distance < THRESHOLD
 
@@ -152,13 +155,12 @@ while True:
                         if name == "canvas":
                             if canvas_open:
                                 cv2.imwrite('drawing.png', canvas_image)
-                                persistent_drawing = canvas_image.copy()
-                                canvas_image = np.ones((height, width, 3), dtype=np.uint8) * 255
                                 canvas_open = False
                                 cv2.destroyWindow("Canvas")
                             else:
-                                if persistent_drawing is not None:
-                                    canvas_image = persistent_drawing.copy()
+                                if os.path.exists('drawing.png'):
+                                    canvas_image = cv2.imread('drawing.png')
+                                    canvas_image = cv2.resize(canvas_image, (width, height))
                                 canvas_open = True
                             last_button_time = current_time
                         else:
@@ -166,15 +168,15 @@ while True:
                         last_button_time = current_time
                         break
 
-            # Drawing logic
+            # Handle drawing modes
             if fingers_together:
                 if len(current_stroke) > 0:
                     if button_selected == "pen":
                         cv2.polylines(canvas_image, [np.array(current_stroke)], False, (0,0,0), 2)
                     elif button_selected == "shape":
-                        shape_data = improved_shape_detection(current_stroke)
-                        if shape_data:
-                            shape_type, data = shape_data
+                        detected_shape = improved_shape_detection(current_stroke)
+                        if detected_shape:
+                            shape_type, data = detected_shape
                             if shape_type == "circle":
                                 x, y, r = data
                                 cv2.circle(canvas_image, (x, y), r, (0,0,0), 2)
@@ -191,13 +193,14 @@ while True:
                 elif button_selected == "eraser":
                     radius = int(distance)
                     cv2.circle(canvas_image, (fx, fy), radius, (255,255,255), -1)
+                    # Draw eraser preview (FIX 2: Add preview)
                     cv2.circle(overlay, (fx, fy), radius, (0, 0, 255), 2)
 
     # Draw current stroke preview
     if button_selected in ["pen", "shape"] and len(current_stroke) >= 2:
         cv2.polylines(overlay, [np.array(current_stroke)], False, (255,0,0), 2)
 
-    # Manage canvas window
+    # Show canvas window
     if canvas_open:
         cv2.imshow("Canvas", canvas_image)
     elif cv2.getWindowProperty("Canvas", cv2.WND_PROP_VISIBLE) > 0:
